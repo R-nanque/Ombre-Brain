@@ -1056,6 +1056,60 @@
   #settings-view[data-active-sgroup="advanced"] .config-section[data-sgroup]:not([data-sgroup="advanced"]) { display: none !important; }
   #settings-view[data-active-sgroup="backup"]   .config-section[data-sgroup]:not([data-sgroup="backup"])   { display: none !important; }
 
+  /* 全局记忆替换：用一块小型校对台表达「先看清、再动手」。 */
+  .memory-replace-grid { display:grid; grid-template-columns:1fr auto 1fr; gap:10px; align-items:end; }
+  .memory-replace-field label { display:block; font-size:12px; font-weight:650; margin-bottom:6px; }
+  .memory-replace-field input { width:100%; min-width:0; }
+  .memory-replace-arrow { color:var(--accent); padding-bottom:11px; font-family:'Share Tech Mono',monospace; }
+  .memory-replace-options { display:flex; flex-wrap:wrap; gap:8px 18px; margin:11px 0; }
+  .memory-replace-options label { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--text-dim); cursor:pointer; }
+  .memory-replace-result {
+    display:none; margin:12px 0 0; padding:11px 13px; border-radius:12px;
+    background:var(--surface-solid);
+    box-shadow:inset 2px 2px 5px var(--shadow-dark-subtle), inset -2px -2px 4px var(--shadow-light);
+    font-size:12px; line-height:1.7; color:var(--text-dim);
+  }
+  .memory-replace-result.ready { display:block; }
+  .memory-replace-count { color:var(--text); font-weight:700; }
+  .memory-replace-actions { display:flex; justify-content:flex-end; gap:9px; align-items:center; margin-top:12px; flex-wrap:wrap; }
+  .memory-replace-undo {
+    display:none; margin-top:14px; padding:11px 13px; border-top:1px dashed var(--border);
+    font-size:12px; color:var(--text-dim); align-items:center; justify-content:space-between; gap:12px;
+  }
+  .memory-replace-undo.available { display:flex; }
+  #memory-replace-modal {
+    display:none; position:fixed; inset:0; z-index:10020; align-items:center; justify-content:center;
+    padding:18px; background:rgba(40,34,28,.62); backdrop-filter:blur(5px);
+  }
+  #memory-replace-modal.open { display:flex; }
+  .memory-replace-dialog {
+    width:min(760px,96vw); max-height:88vh; overflow:auto; padding:24px;
+    border-radius:20px; background:var(--surface);
+    box-shadow:0 24px 70px rgba(30,25,20,.38), inset 0 0 0 2px rgba(194,152,47,.28);
+  }
+  .memory-replace-dialog-head { display:flex; justify-content:space-between; gap:14px; align-items:flex-start; }
+  .memory-replace-dialog h3 { margin:0 0 5px; font-size:17px; }
+  .memory-replace-summary { font-size:12px; color:var(--text-dim); line-height:1.7; }
+  .memory-replace-sample-meta { margin:16px 0 8px; font-size:12px; color:var(--text-dim); }
+  .memory-replace-compare { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .memory-replace-pane { min-width:0; }
+  .memory-replace-pane > span { display:block; margin:0 0 6px 2px; font:11px 'Share Tech Mono',monospace; letter-spacing:.08em; color:var(--text-light); }
+  .memory-replace-snippet {
+    min-height:108px; padding:13px; border-radius:12px; white-space:pre-wrap; overflow-wrap:anywhere;
+    background:var(--surface-solid); color:var(--text); font-size:13px; line-height:1.75;
+    box-shadow:inset 3px 3px 7px var(--shadow-dark-subtle), inset -3px -3px 6px var(--shadow-light);
+  }
+  .memory-replace-snippet mark { border-radius:3px; padding:1px 2px; color:inherit; }
+  .memory-replace-before mark { background:rgba(190,90,65,.23); text-decoration:line-through; text-decoration-thickness:1.5px; }
+  .memory-replace-after mark { background:rgba(75,145,100,.22); }
+  .memory-replace-warning { margin-top:12px; font-size:11px; color:var(--warning); line-height:1.65; }
+  @media (max-width: 620px) {
+    .memory-replace-grid { grid-template-columns:1fr; }
+    .memory-replace-arrow { transform:rotate(90deg); justify-self:center; padding:0; }
+    .memory-replace-compare { grid-template-columns:1fr; }
+    .memory-replace-dialog { padding:19px; }
+  }
+
   /* ============ 输入 / 下拉 / 文本域：统一内凹 LCD 输入槽 ============ */
   input[type=text], input[type=password], input[type=number], input[type=date],
   select, textarea, .config-row input, .config-row select,
@@ -2755,6 +2809,55 @@
       <div>
         <div style="font-weight:600;font-size:13px;margin-bottom:6px;">退出登录 <span class="en">Log Out</span></div>
         <button class="btn-danger" onclick="doLogout()" title="退出登录 / Log out" style="padding:0 14px;height:36px;font-size:12px;display:inline-flex;align-items:center;gap:5px;"><i data-lucide="log-out"></i> 退出登录 Log Out</button>
+      </div>
+    </div>
+
+    <!-- 独立全局工具：现有「称呼替换」仅作技术参考，不与此功能共用交互状态。 -->
+    <div class="config-section" id="sec-memory-replace" data-sgroup="basics">
+      <h3>记忆文字替换 <span class="sec-en">Find &amp; Replace</span></h3>
+      <p style="font-size:12px;color:var(--text-dim);line-height:1.7;margin:4px 0 14px;">
+        在活跃与已归档记忆的标题、正文、标签、域、记忆意义与信件称呼中做字面替换。<br>
+        执行前会先给出一条真实记忆的前后对比；替换框留空即删除查找内容。
+      </p>
+
+      <div class="memory-replace-grid">
+        <div class="memory-replace-field">
+          <label for="memory-replace-find">查找内容</label>
+          <input type="text" id="memory-replace-find" maxlength="500" autocomplete="off"
+            placeholder="例如：旧称呼" onkeydown="if(event.key==='Enter'){event.preventDefault();checkMemoryReplace();}" />
+        </div>
+        <div class="memory-replace-arrow" aria-hidden="true">→</div>
+        <div class="memory-replace-field">
+          <label for="memory-replace-with">替换为 <span style="font-weight:400;color:var(--text-light);">留空 = 删除</span></label>
+          <input type="text" id="memory-replace-with" maxlength="4000" autocomplete="off"
+            placeholder="新文字，或留空删除" />
+        </div>
+      </div>
+
+      <div class="memory-replace-options">
+        <label><input type="checkbox" id="memory-replace-ignore-case"> 忽略大小写</label>
+        <label title="开启后会改写作为原始证据保存的引用文字">
+          <input type="checkbox" id="memory-replace-quotes"> 包含原话引用
+        </label>
+      </div>
+
+      <div id="memory-replace-result" class="memory-replace-result" role="status" aria-live="polite"></div>
+      <div class="memory-replace-actions">
+        <span id="memory-replace-msg" style="font-size:12px;color:var(--text-dim);margin-right:auto;"></span>
+        <button class="btn-secondary" id="memory-replace-check" onclick="checkMemoryReplace()"
+          style="height:34px;padding:0 14px;font-size:12px;display:inline-flex;align-items:center;gap:5px;">
+          <i data-lucide="search"></i> 检查匹配
+        </button>
+        <button class="btn-primary" id="memory-replace-preview" onclick="openMemoryReplacePreview()" disabled
+          style="height:36px;padding:0 16px;font-size:12px;display:inline-flex;align-items:center;gap:5px;">
+          <i data-lucide="replace"></i> 预览并替换
+        </button>
+      </div>
+
+      <div id="memory-replace-undo" class="memory-replace-undo">
+        <span id="memory-replace-undo-text"></span>
+        <button class="btn-secondary" onclick="confirmMemoryReplaceUndo()"
+          style="height:32px;padding:0 13px;font-size:12px;white-space:nowrap;">撤销上次替换</button>
       </div>
     </div>
 
@@ -5367,6 +5470,7 @@ function activateDashboardTab(tab) {
         loadSettingsStatus(),
         loadSystemDiagnostics(),
         loadHumanName(),
+        loadMemoryReplaceUndo(),
         loadConfig(),
         refreshEnvConfig(),
         loadGithubStatus(),
@@ -10573,9 +10677,264 @@ async function syncExistingHuman() {
     if (msg) { msg.textContent = '替换失败：' + e.message; msg.style.color = 'var(--negative)'; }
   }
 }
+
+// ============================================================
+// Independent global memory find/replace
+// ============================================================
+let memoryReplacePreviewState = null;
+
+function memoryReplacePayload() {
+  return {
+    find: document.getElementById('memory-replace-find')?.value || '',
+    replacement: document.getElementById('memory-replace-with')?.value || '',
+    ignore_case: !!document.getElementById('memory-replace-ignore-case')?.checked,
+    include_quotes: !!document.getElementById('memory-replace-quotes')?.checked,
+  };
+}
+
+function memoryReplaceSetBusy(busy) {
+  var checkBtn = document.getElementById('memory-replace-check');
+  var previewBtn = document.getElementById('memory-replace-preview');
+  if (checkBtn) checkBtn.disabled = busy;
+  if (previewBtn) previewBtn.disabled = busy || !(memoryReplacePreviewState && memoryReplacePreviewState.replacement_count > 0);
+}
+
+function memoryReplaceRegex(text, ignoreCase) {
+  return new RegExp(String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), ignoreCase ? 'gi' : 'g');
+}
+
+function memoryReplaceHighlight(text, needle, ignoreCase) {
+  text = String(text == null ? '' : text);
+  if (!needle) return esc(text) || '<span style="color:var(--text-light)">（空）</span>';
+  var regex = memoryReplaceRegex(needle, ignoreCase);
+  var html = '';
+  var cursor = 0;
+  var match;
+  while ((match = regex.exec(text)) !== null) {
+    html += esc(text.slice(cursor, match.index));
+    html += '<mark>' + esc(match[0]) + '</mark>';
+    cursor = match.index + match[0].length;
+    if (!match[0].length) regex.lastIndex += 1;
+  }
+  html += esc(text.slice(cursor));
+  return html || '<span style="color:var(--text-light)">（空）</span>';
+}
+
+function renderMemoryReplaceResult(data) {
+  var result = document.getElementById('memory-replace-result');
+  var previewBtn = document.getElementById('memory-replace-preview');
+  if (!result || !previewBtn) return;
+  var fieldParts = Object.entries(data.field_counts || {}).map(function(entry) {
+    var label = (data.field_labels || {})[entry[0]] || entry[0];
+    return esc(label) + ' ' + Number(entry[1] || 0);
+  });
+  result.innerHTML = '<span class="memory-replace-count">找到 ' + Number(data.memory_count || 0)
+    + ' 条记忆，共出现 ' + Number(data.replacement_count || 0) + ' 次</span>'
+    + (fieldParts.length ? '<br>' + fieldParts.join(' · ') : '<br>没有匹配内容');
+  result.classList.add('ready');
+  previewBtn.disabled = !(data.replacement_count > 0);
+}
+
+async function checkMemoryReplace(openAfter) {
+  var payload = memoryReplacePayload();
+  var msg = document.getElementById('memory-replace-msg');
+  if (!payload.find) {
+    if (msg) { msg.textContent = '请输入要查找的内容'; msg.style.color = 'var(--negative)'; }
+    document.getElementById('memory-replace-find')?.focus();
+    return null;
+  }
+  if (payload.find === payload.replacement) {
+    if (msg) { msg.textContent = '查找内容与替换内容相同，无需处理'; msg.style.color = 'var(--warning)'; }
+    return null;
+  }
+  memoryReplaceSetBusy(true);
+  if (msg) { msg.textContent = '正在检查全部记忆…'; msg.style.color = 'var(--text-dim)'; }
+  try {
+    var response = await authFetch('/api/settings/memory-replace/preview', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+    var data = await readJsonSafe(response);
+    if (!response.ok) throw new Error(data.error || ('HTTP ' + response.status));
+    memoryReplacePreviewState = Object.assign({}, payload, data);
+    renderMemoryReplaceResult(data);
+    if (msg) { msg.textContent = data.replacement_count ? '检查完成' : ''; msg.style.color = 'var(--text-dim)'; }
+    if (openAfter && data.replacement_count) showMemoryReplacePreview(data);
+    return data;
+  } catch (error) {
+    memoryReplacePreviewState = null;
+    var previewBtn = document.getElementById('memory-replace-preview');
+    if (previewBtn) previewBtn.disabled = true;
+    if (msg) { msg.textContent = error.message; msg.style.color = 'var(--negative)'; }
+    return null;
+  } finally {
+    memoryReplaceSetBusy(false);
+  }
+}
+
+async function openMemoryReplacePreview() {
+  // Always rescan here: a previous count is informational, while the modal's
+  // confirmation token must describe the current vault and current inputs.
+  await checkMemoryReplace(true);
+}
+
+function showMemoryReplacePreview(data) {
+  var modal = document.getElementById('memory-replace-modal');
+  var state = memoryReplacePreviewState;
+  if (!modal || !state) return;
+  var target = state.replacement === '' ? '删除「' + state.find + '」' : '「' + state.find + '」→「' + state.replacement + '」';
+  document.getElementById('memory-replace-modal-summary').textContent =
+    '将修改 ' + data.memory_count + ' 条记忆、' + data.replacement_count + ' 处 · ' + target;
+  var wrap = document.getElementById('memory-replace-sample-wrap');
+  var noSample = document.getElementById('memory-replace-no-sample');
+  if (data.sample) {
+    wrap.style.display = '';
+    noSample.style.display = 'none';
+    document.getElementById('memory-replace-sample-meta').textContent =
+      '示例记忆：' + data.sample.name + ' · 命中位置：' + data.sample.field_label;
+    document.getElementById('memory-replace-before').innerHTML =
+      memoryReplaceHighlight(data.sample.before, state.find, state.ignore_case);
+    document.getElementById('memory-replace-after').innerHTML =
+      memoryReplaceHighlight(data.sample.after, state.replacement, false);
+  } else {
+    wrap.style.display = 'none';
+    noSample.style.display = '';
+  }
+  var confirmBtn = document.getElementById('memory-replace-confirm');
+  confirmBtn.textContent = '确认替换 ' + data.replacement_count + ' 处';
+  confirmBtn.disabled = !data.sample;
+  modal.classList.add('open');
+  document.body.style.overflow = 'hidden';
+  confirmBtn.focus();
+}
+
+function closeMemoryReplacePreview() {
+  document.getElementById('memory-replace-modal')?.classList.remove('open');
+  document.body.style.overflow = '';
+}
+
+async function applyMemoryReplace() {
+  var state = memoryReplacePreviewState;
+  var msg = document.getElementById('memory-replace-msg');
+  if (!state || !state.confirmation_token) return;
+  var confirmBtn = document.getElementById('memory-replace-confirm');
+  confirmBtn.disabled = true;
+  confirmBtn.textContent = '正在替换…';
+  try {
+    var response = await authFetch('/api/settings/memory-replace/apply', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        find: state.find,
+        replacement: state.replacement,
+        ignore_case: state.ignore_case,
+        include_quotes: state.include_quotes,
+        confirmation_token: state.confirmation_token,
+      }),
+    });
+    var data = await readJsonSafe(response);
+    if (!response.ok) throw new Error(data.error || ('HTTP ' + response.status));
+    closeMemoryReplacePreview();
+    if (msg) {
+      msg.textContent = '已更新 ' + data.memory_count + ' 条记忆、' + data.replacement_count + ' 处';
+      msg.style.color = 'var(--positive)';
+    }
+    memoryReplacePreviewState = null;
+    document.getElementById('memory-replace-preview').disabled = true;
+    await loadMemoryReplaceUndo();
+  } catch (error) {
+    if (msg) { msg.textContent = error.message; msg.style.color = 'var(--negative)'; }
+    closeMemoryReplacePreview();
+  } finally {
+    confirmBtn.disabled = false;
+  }
+}
+
+async function loadMemoryReplaceUndo() {
+  var row = document.getElementById('memory-replace-undo');
+  var textEl = document.getElementById('memory-replace-undo-text');
+  if (!row || !textEl) return;
+  try {
+    var response = await authFetch('/api/settings/memory-replace/undo');
+    var data = await readJsonSafe(response);
+    if (!response.ok || !data.available) {
+      row.classList.remove('available');
+      return;
+    }
+    var replacement = data.replacement === '' ? '（删除）' : data.replacement;
+    textEl.textContent = '上次操作：「' + data.find + '」→「' + replacement + '」 · '
+      + data.memory_count + ' 条记忆、' + data.replacement_count + ' 处';
+    row.classList.add('available');
+  } catch (_error) {
+    row.classList.remove('available');
+  }
+}
+
+async function confirmMemoryReplaceUndo() {
+  if (!window.confirm('撤销上次全局替换？替换后又被手动编辑的记忆会安全跳过，不会覆盖新内容。')) return;
+  var msg = document.getElementById('memory-replace-msg');
+  if (msg) { msg.textContent = '正在撤销…'; msg.style.color = 'var(--text-dim)'; }
+  try {
+    var response = await authFetch('/api/settings/memory-replace/undo', {method: 'POST'});
+    var data = await readJsonSafe(response);
+    if (!response.ok) throw new Error(data.error || ('HTTP ' + response.status));
+    if (msg) {
+      msg.textContent = data.remaining
+        ? ('已恢复 ' + data.restored + ' 条；' + data.remaining + ' 条因后来被编辑而跳过')
+        : ('已撤销，恢复 ' + data.restored + ' 条记忆');
+      msg.style.color = data.remaining ? 'var(--warning)' : 'var(--positive)';
+    }
+    await loadMemoryReplaceUndo();
+  } catch (error) {
+    if (msg) { msg.textContent = error.message; msg.style.color = 'var(--negative)'; }
+  }
+}
+
+document.addEventListener('keydown', function(event) {
+  if (event.key === 'Escape' && document.getElementById('memory-replace-modal')?.classList.contains('open')) {
+    closeMemoryReplacePreview();
+  }
+});
 </script>
 
 <!-- ── E/F 级错误自动弹窗 Modal ────────────────────────────── -->
+<!-- 全局记忆替换确认：只展示一条非锁定真实记忆的实际变化。 -->
+<div id="memory-replace-modal" role="dialog" aria-modal="true" aria-labelledby="memory-replace-modal-title"
+  onclick="if(event.target===this)closeMemoryReplacePreview()">
+  <div class="memory-replace-dialog">
+    <div class="memory-replace-dialog-head">
+      <div>
+        <h3 id="memory-replace-modal-title">替换前请检查一个真实例子</h3>
+        <div id="memory-replace-modal-summary" class="memory-replace-summary"></div>
+      </div>
+      <button onclick="closeMemoryReplacePreview()" aria-label="关闭"
+        style="background:none;border:none;color:var(--text-dim);cursor:pointer;padding:3px;"><i data-lucide="x"></i></button>
+    </div>
+    <div id="memory-replace-sample-wrap">
+      <div id="memory-replace-sample-meta" class="memory-replace-sample-meta"></div>
+      <div class="memory-replace-compare">
+        <div class="memory-replace-pane">
+          <span>BEFORE · 替换前</span>
+          <div id="memory-replace-before" class="memory-replace-snippet memory-replace-before"></div>
+        </div>
+        <div class="memory-replace-pane">
+          <span>AFTER · 替换后</span>
+          <div id="memory-replace-after" class="memory-replace-snippet memory-replace-after"></div>
+        </div>
+      </div>
+    </div>
+    <div id="memory-replace-no-sample" class="memory-replace-warning" style="display:none;">
+      匹配只出现在当前对你锁定的信件中。为避免提前泄露内容，无法提供真实样本，本次不允许执行。
+    </div>
+    <div class="memory-replace-warning">确认后将处理全部匹配记忆，并保留一次可撤销记录。执行前若记忆已变化，系统会拒绝使用过期预览。</div>
+    <div class="memory-replace-actions" style="margin-top:18px;">
+      <button class="btn-secondary" onclick="closeMemoryReplacePreview()" style="height:36px;padding:0 17px;">取消</button>
+      <button class="btn-primary" id="memory-replace-confirm" onclick="applyMemoryReplace()" style="height:38px;padding:0 19px;">确认全部替换</button>
+    </div>
+  </div>
+</div>
+
 <div id="error-alert-popup"
   style="display:none;position:fixed;inset:0;z-index:10000;align-items:center;justify-content:center;background:rgba(44,42,38,0.65);backdrop-filter:blur(4px);"
   onclick="if(event.target===this)closeErrorAlertPopup()">

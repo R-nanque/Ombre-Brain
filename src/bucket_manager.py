@@ -466,6 +466,32 @@ _METADATA_TEXT_LIMITS = {
     "_pre_anchor_source_tool": _SOURCE_TOOL_MAX,
 }
 
+# Dashboard global find/replace deliberately stays on human-readable fields.
+# IDs, lifecycle state, source references, timestamps and scoring metadata are
+# structural data and must never be touched by a textual maintenance action.
+_GLOBAL_REPLACE_SCALAR_FIELDS = (
+    "name",
+    "title",
+    "why_remembered",
+    "user_name",
+    "writer_name",
+    "author",
+)
+_GLOBAL_REPLACE_LIST_FIELDS = ("tags", "domain", "meaning")
+_GLOBAL_REPLACE_FIELD_LABELS = {
+    "content": "正文",
+    "name": "记忆名称",
+    "title": "主题 / 标题",
+    "why_remembered": "为什么记得",
+    "user_name": "收件人称呼",
+    "writer_name": "作者称呼",
+    "author": "作者",
+    "tags": "标签",
+    "domain": "域 / 分类",
+    "meaning": "记忆意义",
+    "quotes": "原话引用",
+}
+
 # --- _time_ripple：时间涾漪 ---
 _RIPPLE_HOURS = 48.0       # ±该小时内的桶被轻微唤醒
 _RIPPLE_MAX_BUCKETS = 5    # 一次 touch 最多唤醒几个邻居（有界 I/O）
@@ -2026,6 +2052,585 @@ class BucketManager:
                 total += replacements
 
         return {"buckets_changed": changed, "replacements": total}
+
+    def global_text_replace_turn(self):
+        """Serialize preview/apply/undo jobs without reusing human-name state."""
+
+        return _filesystem_turn(
+            str(self.base_dir),
+            "settings-global-text-replace",
+            timeout_seconds=300.0,
+        )
+
+    @property
+    def _global_text_replace_undo_path(self) -> str:
+        return os.path.join(self.base_dir, ".global_text_replace_undo.json")
+
+    @staticmethod
+    def _replacement_pattern(find: str, ignore_case: bool) -> re.Pattern[str]:
+        flags = re.IGNORECASE if ignore_case else 0
+        return re.compile(re.escape(find), flags)
+
+    @staticmethod
+    def _replace_literal(
+        pattern: re.Pattern[str], value: str, replacement: str
+    ) -> tuple[str, int]:
+        # A callback keeps replacement backslashes literal (``\\1`` is text,
+        # never a regex group reference).
+        return pattern.subn(lambda _match: replacement, value)
+
+    @staticmethod
+    def _global_replace_preview_text(value) -> str:
+        if isinstance(value, list):
+            if value and isinstance(value[0], dict):
+                return "\n".join(
+                    str(item.get("text") or "")
+                    for item in value
+                    if isinstance(item, dict)
+                )
+            return " · ".join(str(item) for item in value)
+        return str(value or "")
+
+    @staticmethod
+    def _global_replace_excerpt(text: str, find: str, ignore_case: bool) -> str:
+        """Return a bounded real-value excerpt around the first match."""
+
+        if len(text) <= 360:
+            return text
+        flags = re.IGNORECASE if ignore_case else 0
+        match = re.search(re.escape(find), text, flags)
+        if match is None:
+            return text[:357] + "…"
+        start = max(0, match.start() - 150)
+        end = min(len(text), match.end() + 150)
+        return ("…" if start else "") + text[start:end] + ("…" if end < len(text) else "")
+
+    def _global_replace_changes_for_post(
+        self,
+        post,
+        *,
+        pattern: re.Pattern[str],
+        replacement: str,
+        include_quotes: bool,
+    ) -> tuple[dict[str, dict[str, object]], dict[str, int]]:
+        """Build lossless per-field before/after values without writing."""
+
+        changes: dict[str, dict[str, object]] = {}
+        counts: dict[str, int] = {}
+
+        content_before = str(post.content or "")
+        content_after, count = self._replace_literal(
+            pattern, content_before, replacement
+        )
+        if count:
+            self._validate_bucket_content(content_after)
+            changes["content"] = {
+                "before": content_before,
+                "after": content_after,
+                "count": count,
+            }
+            counts["content"] = count
+
+        for field in _GLOBAL_REPLACE_SCALAR_FIELDS:
+            value = post.get(field)
+            if not isinstance(value, str) or not value:
+                continue
+            replaced, count = self._replace_literal(pattern, value, replacement)
+            if not count:
+                continue
+            limit = _METADATA_TEXT_LIMITS.get(field)
+            if limit is not None and len(replaced) > limit:
+                raise ValueError(
+                    f"{_GLOBAL_REPLACE_FIELD_LABELS[field]}替换后超过 {limit} 个字符"
+                )
+            changes[field] = {"before": value, "after": replaced, "count": count}
+            counts[field] = count
+
+        for field in _GLOBAL_REPLACE_LIST_FIELDS:
+            raw = post.get(field)
+            if isinstance(raw, str):
+                values = [raw]
+            elif isinstance(raw, (list, tuple)):
+                values = [str(item) for item in raw]
+            else:
+                continue
+            replaced_values: list[str] = []
+            field_count = 0
+            for value in values:
+                replaced, count = self._replace_literal(pattern, value, replacement)
+                field_count += count
+                # Deleting the only text in a tag/domain/meaning item removes
+                # that empty item rather than persisting a meaningless label.
+                if replaced.strip():
+                    replaced_values.append(replaced)
+            if not field_count:
+                continue
+            if field == "tags":
+                if len(replaced_values) > _MAX_TAGS or any(
+                    len(item) > _MAX_TAG_CHARS for item in replaced_values
+                ):
+                    raise ValueError("标签替换后超出存储上限")
+            elif field == "domain":
+                if not replaced_values and str(post.get("type") or "") != "feel":
+                    replaced_values = [_DEFAULT_DOMAIN_NAME]
+                if len(replaced_values) > _MAX_DOMAINS or any(
+                    len(item) > _MAX_DOMAIN_CHARS for item in replaced_values
+                ):
+                    raise ValueError("域 / 分类替换后超出存储上限")
+            elif any(len(item) > _MEANING_ITEM_MAX for item in replaced_values):
+                raise ValueError("记忆意义替换后超出存储上限")
+            changes[field] = {
+                "before": values,
+                "after": replaced_values,
+                "count": field_count,
+            }
+            counts[field] = field_count
+
+        if include_quotes:
+            raw_quotes = post.get("quotes")
+            if isinstance(raw_quotes, list):
+                quotes_before = [
+                    dict(item) for item in raw_quotes if isinstance(item, dict)
+                ]
+                quotes_after = [dict(item) for item in quotes_before]
+                quote_count = 0
+                kept: list[dict] = []
+                for quote in quotes_after:
+                    text = quote.get("text")
+                    if not isinstance(text, str):
+                        kept.append(quote)
+                        continue
+                    replaced, count = self._replace_literal(pattern, text, replacement)
+                    quote_count += count
+                    if replaced.strip():
+                        quote["text"] = replaced
+                        kept.append(quote)
+                if quote_count:
+                    sanitized = self._sanitize_quotes(kept) if kept else []
+                    changes["quotes"] = {
+                        "before": quotes_before,
+                        "after": sanitized,
+                        "count": quote_count,
+                    }
+                    counts["quotes"] = quote_count
+
+        if changes:
+            # YAML/frontmatter serialization has a canonical newline shape for
+            # Markdown bodies.  Store that exact post-commit value in the
+            # confirmation token and undo journal, otherwise a harmless
+            # serializer-added newline would look like a concurrent edit.
+            planned_post = frontmatter.loads(frontmatter.dumps(post))
+            self._apply_global_replace_values(
+                planned_post,
+                {field: change["after"] for field, change in changes.items()},
+            )
+            canonical_post = frontmatter.loads(frontmatter.dumps(planned_post))
+            canonical_values = self._current_global_replace_values(
+                canonical_post, changes.keys()
+            )
+            for field, value in canonical_values.items():
+                changes[field]["after"] = value
+
+        return changes, counts
+
+    def _build_global_text_replace_plan(
+        self,
+        find: str,
+        replacement: str,
+        *,
+        ignore_case: bool,
+        include_quotes: bool,
+    ) -> dict:
+        pattern = self._replacement_pattern(find, ignore_case)
+        directories = list(self._active_dirs) + [self.archive_dir]
+        items: list[dict] = []
+        field_counts: dict[str, int] = {}
+        sample = None
+        seen_paths: set[str] = set()
+
+        # Importing the storage-level helper here avoids a dependency on the
+        # tools layer while ensuring a locked Letter is never previewed.
+        from ombrebrain.storage.letter_lock import letter_lock_state
+
+        for _root, _filename, file_path in self._iter_md_files(directories):
+            normalized_path = os.path.normcase(os.path.abspath(file_path))
+            if normalized_path in seen_paths:
+                continue
+            seen_paths.add(normalized_path)
+            try:
+                post = frontmatter.load(file_path)
+            except Exception as exc:
+                logger.warning("global replace skipped unreadable bucket %s: %s", file_path, exc)
+                continue
+            changes, counts = self._global_replace_changes_for_post(
+                post,
+                pattern=pattern,
+                replacement=replacement,
+                include_quotes=include_quotes,
+            )
+            if not changes:
+                continue
+            bucket_id = str(post.get("id") or Path(file_path).stem)
+            item = {
+                "bucket_id": bucket_id,
+                "changes": changes,
+            }
+            items.append(item)
+            for field, count in counts.items():
+                field_counts[field] = field_counts.get(field, 0) + count
+
+            if sample is None:
+                bucket = {
+                    "id": bucket_id,
+                    "content": str(post.content or ""),
+                    "metadata": dict(post.metadata),
+                }
+                locked = (
+                    str(post.get("type") or "").strip().lower() == "letter"
+                    and bool(letter_lock_state(bucket, "human").get("locked"))
+                )
+                if not locked:
+                    sample_field, sample_change = next(iter(changes.items()))
+                    before_text = self._global_replace_preview_text(
+                        sample_change["before"]
+                    )
+                    after_text = self._global_replace_preview_text(
+                        sample_change["after"]
+                    )
+                    sample = {
+                        "bucket_id": bucket_id,
+                        "name": str(post.get("title") or post.get("name") or bucket_id),
+                        "field": sample_field,
+                        "field_label": _GLOBAL_REPLACE_FIELD_LABELS[sample_field],
+                        "before": self._global_replace_excerpt(
+                            before_text, find, ignore_case
+                        ),
+                        "after": self._global_replace_excerpt(
+                            after_text, replacement or find, ignore_case=False
+                        ),
+                    }
+
+        token_hasher = hashlib.sha256()
+        token_parts = ({
+            "find": find,
+            "replacement": replacement,
+            "ignore_case": ignore_case,
+            "include_quotes": include_quotes,
+        },)
+        for token_part in token_parts:
+            token_hasher.update(
+                json.dumps(
+                    token_part,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            )
+            token_hasher.update(b"\0")
+        for item in items:
+            token_part = {
+                "bucket_id": item["bucket_id"],
+                "before": {
+                    field: change["before"]
+                    for field, change in item["changes"].items()
+                },
+            }
+            token_hasher.update(
+                json.dumps(
+                    token_part,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            )
+            token_hasher.update(b"\0")
+        token = token_hasher.hexdigest()
+        return {
+            "find": find,
+            "replacement": replacement,
+            "ignore_case": ignore_case,
+            "include_quotes": include_quotes,
+            "memory_count": len(items),
+            "replacement_count": sum(field_counts.values()),
+            "field_counts": field_counts,
+            "field_labels": _GLOBAL_REPLACE_FIELD_LABELS,
+            "sample": sample,
+            "confirmation_token": token,
+            "items": items,
+        }
+
+    async def preview_global_text_replacement(
+        self,
+        find: str,
+        replacement: str,
+        *,
+        ignore_case: bool = False,
+        include_quotes: bool = False,
+    ) -> dict:
+        plan = self._build_global_text_replace_plan(
+            find,
+            replacement,
+            ignore_case=ignore_case,
+            include_quotes=include_quotes,
+        )
+        return {key: value for key, value in plan.items() if key != "items"}
+
+    @staticmethod
+    def _apply_global_replace_values(post, values: dict[str, object]) -> None:
+        for field, value in values.items():
+            if field == "content":
+                post.content = str(value or "")
+            else:
+                post[field] = value
+
+    @staticmethod
+    def _current_global_replace_values(post, fields) -> dict[str, object]:
+        values: dict[str, object] = {}
+        for field in fields:
+            if field == "content":
+                values[field] = str(post.content or "")
+            else:
+                value = post.get(field)
+                # Detach nested lists/dicts from python-frontmatter's object.
+                values[field] = json.loads(json.dumps(value, ensure_ascii=False))
+        return values
+
+    async def _commit_global_replace_item(
+        self,
+        item: dict,
+        *,
+        expected_side: str,
+        target_side: str,
+        event_action: str,
+    ) -> tuple[bool, dict]:
+        bucket_id = str(item["bucket_id"])
+        changes = item["changes"]
+        expected = {field: change[expected_side] for field, change in changes.items()}
+        target = {field: change[target_side] for field, change in changes.items()}
+        derived_state: dict[str, object] = {}
+        final_path = ""
+        async with self._bucket_turn(bucket_id):
+            file_path = self._find_bucket_file(bucket_id)
+            if not file_path:
+                return False, {"bucket_id": bucket_id, "reason": "memory missing"}
+            try:
+                post = frontmatter.load(file_path)
+            except Exception as exc:
+                return False, {"bucket_id": bucket_id, "reason": str(exc)}
+            current = self._current_global_replace_values(post, changes.keys())
+            if current != expected:
+                mismatched = sorted(
+                    field for field in expected if current.get(field) != expected[field]
+                )
+                return False, {
+                    "bucket_id": bucket_id,
+                    "reason": "memory changed",
+                    "fields": mismatched,
+                }
+
+            self._apply_global_replace_values(post, target)
+            self._validate_bucket_content(str(post.content or ""))
+            bucket_type = str(post.get("type") or "dynamic").strip().lower()
+            archived = (
+                bucket_type == "archived"
+                or bool(post.get("deleted_at"))
+                or os.path.commonpath(
+                    [os.path.abspath(file_path), os.path.abspath(self.archive_dir)]
+                ) == os.path.abspath(self.archive_dir)
+            )
+            target_path = file_path
+            if not archived and bucket_type in _EDITABLE_BUCKET_TYPES:
+                target_path = self._bucket_target_path(
+                    file_path,
+                    bucket_type,
+                    post.get("domain") or [_DEFAULT_DOMAIN_NAME],
+                    str(post.get("status") or "active"),
+                )
+            try:
+                final_path = self._commit_bucket_update(
+                    file_path, target_path, frontmatter.dumps(post)
+                )
+            except Exception as exc:
+                return False, {"bucket_id": bucket_id, "reason": str(exc)}
+
+            content_changed = "content" in changes
+            meaning_changed = "meaning" in changes
+            derived_state = {
+                "bucket_id": bucket_id,
+                "content": str(post.content or ""),
+                "meaning": post.get("meaning") or [],
+                "queue_content": content_changed,
+                "queue_meaning": meaning_changed,
+            }
+            self._invalidate_bm25()
+            self._record_v3_bucket_event(
+                event_action,
+                bucket_id,
+                bucket_type,
+                str(post.content or ""),
+                dict(post.metadata),
+            )
+            self._record_ledger_event(
+                "TraceUpdated",
+                bucket_id,
+                bucket_type,
+                str(post.content or ""),
+                dict(post.metadata),
+                {"changed_fields": sorted(changes.keys()), "maintenance": event_action},
+            )
+        self._queue_captured_derived_state(derived_state)
+        await self._index_after_update(
+            bucket_id,
+            content_changed="content" in changes,
+            meaning_changed="meaning" in changes,
+        )
+        return True, {"bucket_id": bucket_id, "path": final_path}
+
+    def _write_global_replace_undo(self, payload: dict) -> None:
+        _atomic_write_text(
+            self._global_text_replace_undo_path,
+            json.dumps(payload, ensure_ascii=False, indent=2),
+        )
+
+    def global_text_replace_undo_status(self) -> dict:
+        try:
+            with open(self._global_text_replace_undo_path, encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except FileNotFoundError:
+            return {"available": False}
+        except Exception as exc:
+            logger.warning("global replace undo journal is unreadable: %s", exc)
+            return {"available": False, "error": "撤销记录无法读取"}
+        summary = payload.get("summary") or {}
+        return {"available": bool(payload.get("items")), **summary}
+
+    async def apply_global_text_replacement(
+        self,
+        find: str,
+        replacement: str,
+        *,
+        ignore_case: bool,
+        include_quotes: bool,
+        confirmation_token: str,
+    ) -> dict:
+        async with self.global_text_replace_turn():
+            plan = self._build_global_text_replace_plan(
+                find,
+                replacement,
+                ignore_case=ignore_case,
+                include_quotes=include_quotes,
+            )
+            if not confirmation_token or confirmation_token != plan["confirmation_token"]:
+                raise ValueError("记忆已发生变化，请重新检查匹配并预览")
+            if not plan["items"]:
+                return {"memory_count": 0, "replacement_count": 0}
+
+            journal = {
+                "version": 1,
+                "created_at": datetime.now().astimezone().isoformat(),
+                "summary": {
+                    "find": find,
+                    "replacement": replacement,
+                    "memory_count": plan["memory_count"],
+                    "replacement_count": plan["replacement_count"],
+                    "created_at": datetime.now().astimezone().isoformat(),
+                },
+                "items": plan["items"],
+            }
+            # Persist the complete inverse before the first memory changes.
+            self._write_global_replace_undo(journal)
+            applied: list[dict] = []
+            failure = None
+            for item in plan["items"]:
+                ok, detail = await self._commit_global_replace_item(
+                    item,
+                    expected_side="before",
+                    target_side="after",
+                    event_action="global_text_replace",
+                )
+                if not ok:
+                    failure = detail
+                    break
+                applied.append(item)
+
+            if failure is not None:
+                rollback_failures = []
+                for item in reversed(applied):
+                    ok, detail = await self._commit_global_replace_item(
+                        item,
+                        expected_side="after",
+                        target_side="before",
+                        event_action="global_text_replace_rollback",
+                    )
+                    if not ok:
+                        rollback_failures.append(detail)
+                if not rollback_failures:
+                    try:
+                        os.remove(self._global_text_replace_undo_path)
+                    except FileNotFoundError:
+                        pass
+                else:
+                    journal["items"] = [
+                        item
+                        for item in applied
+                        if item["bucket_id"]
+                        in {entry["bucket_id"] for entry in rollback_failures}
+                    ]
+                    self._write_global_replace_undo(journal)
+                raise RuntimeError(
+                    "替换中断，已回滚已修改内容"
+                    if not rollback_failures
+                    else "替换中断，部分内容无法自动回滚，可使用撤销记录恢复"
+                )
+            return {
+                "memory_count": plan["memory_count"],
+                "replacement_count": plan["replacement_count"],
+                "field_counts": plan["field_counts"],
+            }
+
+    async def undo_global_text_replacement(self) -> dict:
+        async with self.global_text_replace_turn():
+            try:
+                with open(self._global_text_replace_undo_path, encoding="utf-8") as handle:
+                    journal = json.load(handle)
+            except FileNotFoundError:
+                raise ValueError("没有可撤销的全局替换")
+            items = journal.get("items") or []
+            restored = 0
+            conflicts: list[dict] = []
+            for item in reversed(items):
+                ok, detail = await self._commit_global_replace_item(
+                    item,
+                    expected_side="after",
+                    target_side="before",
+                    event_action="global_text_replace_undo",
+                )
+                if ok:
+                    restored += 1
+                else:
+                    conflicts.append(detail)
+            if conflicts:
+                conflict_ids = {entry["bucket_id"] for entry in conflicts}
+                journal["items"] = [
+                    item for item in items if item["bucket_id"] in conflict_ids
+                ]
+                journal["summary"]["memory_count"] = len(journal["items"])
+                journal["summary"]["replacement_count"] = sum(
+                    int(change.get("count") or 0)
+                    for item in journal["items"]
+                    for change in item.get("changes", {}).values()
+                )
+                self._write_global_replace_undo(journal)
+            else:
+                try:
+                    os.remove(self._global_text_replace_undo_path)
+                except FileNotFoundError:
+                    pass
+            return {
+                "restored": restored,
+                "conflicts": conflicts,
+                "remaining": len(conflicts),
+            }
 
     async def update_content_fragment(
         self,

@@ -892,6 +892,99 @@ def register(mcp) -> None:
                 return JSONResponse({"error": str(e)}, status_code=500)
         return JSONResponse({"ok": True, "from": from_term, "to": cur, "renamed": stats})
 
+    def _memory_replace_payload(body: dict) -> tuple[str, str, bool, bool]:
+        find = body.get("find")
+        replacement = body.get("replacement", "")
+        if not isinstance(find, str) or not find:
+            raise ValueError("请输入要查找的内容")
+        if not isinstance(replacement, str):
+            raise ValueError("替换内容必须是文字")
+        if len(find) > 500:
+            raise ValueError("查找内容不能超过 500 个字符")
+        if len(replacement) > 4000:
+            raise ValueError("替换内容不能超过 4000 个字符")
+        for label, value in (("查找内容", find), ("替换内容", replacement)):
+            if any(unicodedata.category(char).startswith("C") for char in value):
+                raise ValueError(f"{label}不能包含控制字符")
+        if find == replacement:
+            raise ValueError("查找内容与替换内容相同，无需处理")
+        return (
+            find,
+            replacement,
+            parse_bool(body.get("ignore_case"), default=False),
+            parse_bool(body.get("include_quotes"), default=False),
+        )
+
+    @mcp.custom_route("/api/settings/memory-replace/preview", methods=["POST"])
+    async def api_memory_replace_preview(request: Request) -> Response:
+        """Count matches and return one unlocked, real before/after sample."""
+        from starlette.responses import JSONResponse
+        err = sh._require_auth(request)
+        if err:
+            return err
+        try:
+            body = await sh._read_json_object(request)
+            find, replacement, ignore_case, include_quotes = _memory_replace_payload(body)
+            preview = await sh.bucket_mgr.preview_global_text_replacement(
+                find,
+                replacement,
+                ignore_case=ignore_case,
+                include_quotes=include_quotes,
+            )
+            return JSONResponse({"ok": True, **preview})
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        except Exception as exc:
+            logger.exception("memory replacement preview failed")
+            return JSONResponse({"error": f"检查匹配失败：{exc}"}, status_code=500)
+
+    @mcp.custom_route("/api/settings/memory-replace/apply", methods=["POST"])
+    async def api_memory_replace_apply(request: Request) -> Response:
+        """Apply only the exact vault state that the user previewed."""
+        from starlette.responses import JSONResponse
+        err = sh._require_auth(request)
+        if err:
+            return err
+        try:
+            body = await sh._read_json_object(request)
+            find, replacement, ignore_case, include_quotes = _memory_replace_payload(body)
+            token = body.get("confirmation_token")
+            if not isinstance(token, str) or len(token) != 64:
+                raise ValueError("确认信息已失效，请重新预览")
+            result = await sh.bucket_mgr.apply_global_text_replacement(
+                find,
+                replacement,
+                ignore_case=ignore_case,
+                include_quotes=include_quotes,
+                confirmation_token=token,
+            )
+            return JSONResponse({"ok": True, **result})
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=409)
+        except Exception as exc:
+            logger.exception("memory replacement apply failed")
+            return JSONResponse({"error": str(exc)}, status_code=500)
+
+    @mcp.custom_route("/api/settings/memory-replace/undo", methods=["GET", "POST"])
+    async def api_memory_replace_undo(request: Request) -> Response:
+        from starlette.responses import JSONResponse
+        err = sh._require_auth(request)
+        if err:
+            return err
+        if request.method == "GET":
+            return JSONResponse({
+                "ok": True,
+                **sh.bucket_mgr.global_text_replace_undo_status(),
+            })
+        try:
+            result = await sh.bucket_mgr.undo_global_text_replacement()
+            return JSONResponse({"ok": True, **result})
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=409)
+        except Exception as exc:
+            logger.exception("memory replacement undo failed")
+            return JSONResponse({"error": f"撤销失败：{exc}"}, status_code=500)
+
 
     # ---- iter 2.0: anchor 端点 / coordinate-system buckets ----
     # anchor = 「定义我们是谁」的 24 槽。不进默认 breath，硬上限。
