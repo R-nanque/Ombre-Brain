@@ -23,7 +23,7 @@ import pytest
 from errors import ToolInputError
 
 import tools._runtime as rt
-from ombrebrain.storage.quote_store import quotes_from_metadata
+from ombrebrain.storage.quote_store import MAX_QUOTE_CHARS, quotes_from_metadata
 from tools.trace import dispatch as trace_dispatch
 
 
@@ -184,9 +184,12 @@ async def test_overlong_quote_is_rejected_not_truncated(bucket_mgr):
     bucket_id = await _quoted(bucket_mgr, ["原来那句"])
 
     with pytest.raises(ToolInputError) as excinfo:
-        await trace_dispatch(bucket_id=bucket_id, quotes_replace=["长" * 101])
+        await trace_dispatch(
+            bucket_id=bucket_id,
+            quotes_replace=["长" * (MAX_QUOTE_CHARS + 1)],
+        )
 
-    assert "100" in str(excinfo.value)
+    assert str(MAX_QUOTE_CHARS) in str(excinfo.value)
     assert [q["text"] for q in await _quotes_of(bucket_mgr, bucket_id)] == ["原来那句"]
 
 

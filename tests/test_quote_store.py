@@ -61,6 +61,7 @@ def test_overlong_quote_is_rejected_not_truncated():
 
 
 def test_boundary_lengths_are_accepted():
+    assert MAX_QUOTE_CHARS == 150
     assert len(normalize_quotes(["字" * MAX_QUOTE_CHARS])) == 1
     assert len(normalize_quotes([f"第{i}句" for i in range(MAX_QUOTES)])) == MAX_QUOTES
 
