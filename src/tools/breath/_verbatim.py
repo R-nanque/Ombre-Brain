@@ -4,6 +4,8 @@ This module is intentionally small so the compatibility patch can be removed
 without touching retrieval, ranking, or bucket storage.
 """
 
+from datetime import datetime
+
 from ombrebrain.storage.attribution import (
     known_person_names,
     names_from_config,
@@ -14,6 +16,15 @@ from ombrebrain.storage.relation_store import relation_hint
 from utils import count_tokens_approx, strip_wikilinks
 
 from .. import _runtime as rt
+
+
+def bucket_created_date(bucket: dict) -> str:
+    """只展示记忆创建时记录的自然日；缺失或无效时不猜测日期。"""
+    raw = str((bucket.get("metadata") or {}).get("created") or "").strip()
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).date().isoformat()
+    except (TypeError, ValueError):
+        return "未知"
 
 
 def stored_bucket_content(bucket: dict) -> str:
@@ -66,7 +77,7 @@ def render_stored_bucket(
         **names_from_config(getattr(rt, "config", None)),
     )
     miss_block = _miss_block(bucket)
-    rendered = f"{metadata_header}{miss_block}\n{content}"
+    rendered = f"{metadata_header} [生成日期:{bucket_created_date(bucket)}]{miss_block}\n{content}"
     speech_block = render_third_party_block(third_party)
     if speech_block:
         rendered += f"\n{speech_block}"

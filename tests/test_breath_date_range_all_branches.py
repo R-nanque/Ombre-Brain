@@ -240,3 +240,49 @@ async def test_no_range_returns_everything(monkeypatch):
     out = await dispatch()
 
     assert OLD in out and NEW in out
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kwargs", [
+    {},
+    {"query": "那件事"},
+    {"catalog": True},
+    {"importance_min": 9},
+    {"domain": "feel", "query": "那件事"},
+    {"domain": "plan"},
+])
+async def test_every_breath_channel_shows_creation_day_only(monkeypatch, kwargs):
+    bucket_type = kwargs.get("domain", "dynamic")
+    manager = DatedBucketManager([
+        _bucket("dated", "那件事的原文。", created="2026-06-15T23:45:12-05:00",
+                bucket_type=bucket_type),
+    ])
+    _install(monkeypatch, manager)
+
+    out = await dispatch(**kwargs)
+
+    assert "生成日期:2026-06-15" in out
+    assert "23:45:12" not in out
+    if not kwargs.get("catalog"):
+        assert "那件事的原文。" in out
+
+
+@pytest.mark.parametrize("created, expected", [
+    ("2026-06-15", "2026-06-15"),
+    ("2026-06-15T23:45:12Z", "2026-06-15"),
+    ("2026-06-15T23:45:12+08:00", "2026-06-15"),
+    ("", "未知"),
+    (None, "未知"),
+    ("2026-02-30", "未知"),
+    ("坏日期", "未知"),
+])
+def test_rendered_creation_date_preserves_body_and_budget(created, expected):
+    from tools.breath._verbatim import render_stored_bucket
+    from utils import count_tokens_approx
+
+    bucket = _bucket("dated", "原文保持不动。", created=created)
+    rendered, cost = render_stored_bucket(bucket, "[bucket_id:dated]")
+
+    assert rendered == f"[bucket_id:dated] [生成日期:{expected}]\n原文保持不动。"
+    assert bucket["content"] == "原文保持不动。"
+    assert cost == count_tokens_approx(rendered)

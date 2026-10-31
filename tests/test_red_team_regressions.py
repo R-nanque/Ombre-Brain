@@ -150,7 +150,7 @@ def test_breath_returns_prompt_like_memory_verbatim_without_any_safety_markers()
         metadata_header,
     )
 
-    framed_payload = f"{metadata_header}\n{content}"
+    framed_payload = f"{metadata_header} [生成日期:未知]\n{content}"
     assert rendered == framed_payload
     assert framed_payload.endswith(content)
     # 伪造标记只在正文原文里出现一次（系统自己没有再补一份真标记）。

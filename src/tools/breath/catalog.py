@@ -28,6 +28,7 @@ from utils import parse_bool
 from errors import safe_error_detail
 from ._date_range import bucket_in_created_range
 from ._shared import footprint_reader
+from ._verbatim import bucket_created_date
 
 # 类型 → (区头, 排序位)。未知类型归入动态区兜底。
 _SECTIONS = [
@@ -105,7 +106,7 @@ async def surface_catalog(
         )
         line = (
             f"{pin_mark}{anchor_mark}{name} | {','.join(domains) or '未分类'} | {imp} "
-            f"| {_footprint(b, meta)}"
+            f"| 生成日期:{bucket_created_date(b)} | {_footprint(b, meta)}"
         )
         if not letter_locked:
             hint = relation_hint(b)

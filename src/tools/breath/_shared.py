@@ -62,7 +62,7 @@ def render_within_budget(
     max_tokens: int,
     footprint,
 ) -> tuple[list[str], int]:
-    """按 `[created] [bucket_id:x]` 头逐条渲染，返回 (已渲染, 未返回条数)。
+    """按 `[bucket_id:x] [生成日期:YYYY-MM-DD]` 头逐条渲染，返回 (已渲染, 未返回条数)。
 
     放不下就**整条停下**，不截断也不摘要——feel 与 plan 两条通道都靠这个语义：
     截断过的正文比没返回更糟，因为看不出少了什么。
@@ -75,10 +75,9 @@ def render_within_budget(
     lines: list[str] = []
     used = 0
     for index, bucket in enumerate(buckets):
-        created = bucket["metadata"].get("created", "")
         entry, cost = render_stored_bucket(
             bucket,
-            f"[{created}] [bucket_id:{bucket['id']}]",
+            f"[bucket_id:{bucket['id']}]",
             footprint(bucket),
         )
         if used + cost > max_tokens:
